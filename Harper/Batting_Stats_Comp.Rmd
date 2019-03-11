@@ -1,0 +1,173 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+
+
+Import required libraries
+```{r}
+library(sqldf)
+library(dplyr)
+library(ggplot2)
+library(reshape)
+
+```
+
+
+
+Get the Batting Data
+```{r}
+dataPath = "Data/baseballdatabank-2019.2/core/"
+battingData <- read.csv(paste(dataPath, "Batting.csv", sep = ""))
+
+
+
+str(battingData)
+```
+
+National, American League Data
+```{r}
+NLData <- subset(battingData, lgID == "NL" & yearID >= 2012 & AB >= 50)
+ALData <- subset(battingData, lgID == "AL" & yearID >= 2012 & AB >= 50)
+mlbData <- subset(battingData, yearID >= 2012 & AB >= 50)
+```
+
+
+Phillies Data
+```{r}
+philliesData <- select(filter(battingData, teamID == "PHI" & yearID >= 2012 & AB >= 50), c("playerID", "yearID", "G", "AB", "R", "H", "X2B", "X3B", "BB","SF", "HR", "RBI"))
+
+
+
+```
+
+
+
+Make Columns Function
+```{r}
+
+#note I don't inlcude HBP or IBB in OBP since it doesn't really measure the batter's skill
+#X1B refers to singles (I can't start a col name with a 1)
+fill_relevant_cols <- function(df){
+  tmp <- ( df %>% mutate(BA = H/AB, OBP = (H + BB)/(AB + BB),SLG = (2*X2B + 3*X3B + 4*HR + BB + (H - X2B - X3B - HR))/AB, X1B = H - HR - X2B - X3B, OPS = SLG + OBP))
+  
+  return (tmp %>% mutate_at(vars(BA, AB, OPS, OBP, SLG), funs(round(., 3))))
+
+}
+```
+
+
+Make Columns for each data set
+```{r}
+philliesData <- fill_relevant_cols(philliesData)
+
+NLData <- fill_relevant_cols(NLData)
+ALData <- fill_relevant_cols(ALData)
+mlbData <- fill_relevant_cols(mlbData)
+harperData <- filter(battingData, playerID == "harpebr03" & yearID >= 2012)
+harperData <- fill_relevant_cols(harperBatting)
+```
+
+
+Function to compute average team statistics grouped by yearID
+```{r}
+getCondensedDFByStat <- function(dfName, statToCompute){
+  
+  return(sqldf(paste0("select yearID, avg(",statToCompute, ") as Team_Avg_", statToCompute, " from ",dfName, " group by yearID")))
+}
+```
+
+
+Compute average statistics over time starting from 2012
+```{r}
+
+#get the condensed batting average
+philliesCondensedBA <- getCondensedDFByStat("philliesData", "BA")
+ALCondensedBA <- getCondensedDFByStat("ALData", "BA")
+NLCondensedBA <- getCondensedDFByStat("NLData", "BA")
+mlbCondensedBA <- getCondensedDFByStat("mlbData", "BA")
+harperCondensedBA <- getCondensedDFByStat("harperData", "BA")
+
+
+#Condensed OBP
+philliesCondensedOBP <- getCondensedDFByStat("philliesData", "OBP")
+ALCondensedOBP <- getCondensedDFByStat("ALData", "OBP")
+NLCondensedOBP <- getCondensedDFByStat("NLData", "OBP")
+mlbCondensedOBP <- getCondensedDFByStat("mlbData", "OBP")
+harperCondensedOBP <- getCondensedDFByStat("harperData", "OBP")
+
+
+
+
+#Condensed SLG
+philliesCondensedSLG <- getCondensedDFByStat("philliesData", "SLG")
+ALCondensedSLG <- getCondensedDFByStat("ALData", "SLG")
+NLCondensedSLG <- getCondensedDFByStat("NLData", "SLG")
+mlbCondensedSLG <- getCondensedDFByStat("mlbData", "SLG")
+harperCondensedSLG <- getCondensedDFByStat("harperData", "SLG")
+
+
+#Condensed OPS
+philliesCondensedOPS <- getCondensedDFByStat("philliesData", "OPS")
+ALCondensedOPS <- getCondensedDFByStat("ALData", "OPS")
+NLCondensedOPS <- getCondensedDFByStat("NLData", "OPS")
+mlbCondensedOPS <- getCondensedDFByStat("mlbData", "OPS")
+harperCondensedOPS <- getCondensedDFByStat("harperData", "OPS")
+
+
+
+```
+
+
+Plot by either BA, OBP, SLG, or OPS
+```{r}
+plot_by_statistic <- function(stat){
+  phillies <- get(paste0("philliesCondensed", stat))
+  NL <- get(paste0("NLCondensed", stat))
+  AL <- get(paste0("ALCondensed", stat))
+  mlb <- get(paste0("mlbCondensed", stat))
+  harper <-  get(paste0("harperCondensed", stat))
+
+  tmp.list <- list(phillies, NL, AL, mlb, harper)
+  newDF <- do.call(rbind, tmp.list)
+  newDF$league <- factor(rep(c("phillies", "AL", "NL", "MLB", "Harper"), each = sapply(tmp.list, nrow)))
+  g <- ggplot(newDF, aes(x = yearID, y = get(paste0("Team_Avg_", stat)), color = league)) + xlab("Year") + ylab(paste(stat))
+  g <- g + geom_line() +ggtitle(paste0(stat, " from 2012 to 2018")) 
+  return (g)
+}
+```
+
+
+plot using the function above all the statistics 
+```{r}
+
+#plot batting average
+
+plot_by_statistic("BA")
+plot_by_statistic("OBP")
+plot_by_statistic("SLG")
+plot_by_statistic("OPS")
+
+```
+
+
+Salaries
+```{r}
+salaries <- read.csv(paste0(dataPath, "Salaries.csv"))
+
+#get average salary
+avgSalariesByTeam <- sqldf("select teamID, yearID, avg(Salary) as 'Team_Avg_Sal' from salaries where yearID >= 2012 group by teamID")
+```
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
