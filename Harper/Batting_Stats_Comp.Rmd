@@ -22,7 +22,7 @@ library(reshape)
 
 Get the Batting Data
 ```{r}
-dataPath = "Data/baseballdatabank-2019.2/core/"
+dataPath = "../Data/baseballdatabank-2019.2/core/"
 battingData <- read.csv(paste(dataPath, "Batting.csv", sep = ""))
 
 
