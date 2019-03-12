@@ -1,0 +1,44 @@
+
+Libraries
+```{r}
+library(ggplot2)
+library(sqldf)
+library(dplyr)
+library(reshape2)
+
+help("inner_join")
+```
+
+
+
+Note salary data only provided up to 2016, but the purpose of this is to show correlation between total team expenditure
+and wins
+```{r}
+dataPath = "../Data/baseballdatabank-2019.2/core/"
+salaries <- read.csv(paste(dataPath, "Salaries.csv", sep = ""))
+teams <- read.csv(paste(dataPath, "Teams.csv", sep = ""))
+
+
+sumSalByYear <- sqldf("select yearID, teamID, sum(salary) as 'Cost' from salaries group by yearID, teamID")
+salariesWithWins <- left_join(sumSalByYear, teams, by = c("teamID", "yearID")) %>% select(yearID, teamID, W, Cost)
+
+
+```
+
+
+plot the wins vs salaries facet = year
+```{r}
+salariesWithWinsPost2010 <- filter(salariesWithWins, yearID >= 2010)
+
+plots <- ggplot(salariesWithWinsPost2010, aes(x = Cost, y = W)) + xlab("Cost") + ylab("Wins") + ggtitle("Wins vs Total Salary") + geom_smooth(method = "lm") + facet_wrap(yearID ~.)
+
+plots
+
+```
+
+
+Get correlations between salary and wins 
+```{r}
+
+```
+
