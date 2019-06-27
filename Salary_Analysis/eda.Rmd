@@ -1,0 +1,378 @@
+---
+title: "Determining MLB underpaid and overpaid players"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(plotly)
+library(scales)
+```
+
+
+Import the relevant data
+```{r}
+path <- "../Data/baseballdatabank-2019.2/core/"
+
+
+salaries <- read.csv(paste0(path, "Salaries.csv"))
+players <- read.csv(paste0(path, "People.csv"))
+batting <- read.csv(paste0(path, "Batting.csv"))
+pitchers <- read.csv(paste0(path, "Pitching.csv"))
+
+head(players)
+
+```
+
+Plot the Salary Data overall, by national league, and by American League
+```{r}
+salaries <- salaries %>% select(year = yearID, team = teamID, league = lgID, playerID, salary)
+avg_salaries_by_league <- salaries %>% group_by(year, league) %>% summarise(avg_salary_league_year = mean(salary)) %>% ungroup()
+avg_salaries_by_year <- salaries %>% group_by(year) %>% summarise(avg_salary_league = mean(salary)) %>% ungroup()
+
+
+ggplot() + geom_line(data = avg_salaries_by_league, aes(x = year, y = avg_salary_league_year, color = league)) + 
+  geom_line(data = avg_salaries_by_year, aes(x = year, y = avg_salary_league, color = "MLB")) + xlab("Year") + ylab("Average_Salary") + ggtitle("Average MLB Salary since 1985") +  scale_y_continuous(labels = comma) + theme_bw()
+
+```
+
+Boxplot of salaries for each year since 2012 (seems the salaries have been relatively skewed)
+```{r}
+recent_salaries <- salaries %>% filter(year >= 2012)
+
+recent_salaries %>% ggplot(aes(group = year, x = year, y = salary)) + geom_boxplot() + theme_bw() + scale_y_continuous(labels = comma)
+
+```
+
+
+Make year_id on salaries table
+```{r}
+salaries <- salaries %>% mutate(year_id = paste(playerID, year, sep="_")) %>% select(year_id, salary)
+
+```
+
+Begin to feature engineer the batting table
+```{r}
+#in case the player had multiple stints
+batting <- batting %>% filter(yearID >= 1985, AB > 100) %>% group_by(playerID, year = yearID) %>% summarise( G = sum(G), AB = sum(AB),R = sum(R), H = sum(H), X2B = sum(X2B), X3B = sum(X3B), HR = sum(HR), RBI = sum(RBI), SB = sum(SB), CS = sum(CS), BB = sum(BB), SO = sum(SO), IBB = sum(IBB), HBP = sum(HBP), SH = sum(SH), SF = sum(SF), GIDP = sum(GIDP)) %>% mutate(BA = H/AB, OBP = (H + BB + HBP)/(AB + BB + HBP + SF), SLG = (H + X2B + 2*X3B + 3*HR)/AB, OPS = OBP + SLG, TA = (BB + HBP + SB + SLG*AB - CS)/(AB - H + CS + GIDP), GPA = (1.8 * OBP + SLG)/4) %>% ungroup()
+
+head(batting)
+
+```
+feature engineer the player info table
+```{r}
+
+players <- players %>% separate(debut, "debut_year", sep="-") %>%
+  
+  select(playerID, birthYear, nameFirst,  nameLast, debut_year)
+```
+
+Join player_info with batting data on playerID, and then join that with salaries
+```{r}
+batting <- inner_join(batting, players, by = "playerID") %>%
+  mutate(year_id = paste(playerID, year, sep="_")) 
+
+
+batting <- inner_join(batting, salaries, by = "year_id") %>% mutate(yearsPlaying = year - as.numeric(debut_year))
+head(batting)
+```
+
+Normalize salary by year 
+```{r}
+batting <- batting %>% group_by(year) %>% mutate(avg_salary = mean(salary), sd_salary = sd(salary)) %>% ungroup() %>% mutate(zSalary = (salary - avg_salary)/sd(salary))
+
+tail(batting)
+```
+
+EDA on batting statistics 
+```{r}
+boxplot(batting$BA, ylab = "Batting Average", main = "Batting Average since 1985")
+boxplot(batting$OBP, ylab = "On Base Percentage",main = "OBP since 1985")
+boxplot(batting$SLG, ylab = "Slugging Percentage", main = "SLG since 1985")
+boxplot(batting$OPS, ylab = "OPS", main = "OPS since 1985")
+
+summary(batting$BA)
+summary(batting$OBP)
+summary(batting$SLG)
+summary(batting$OPS)
+
+
+```
+
+Now let's remove pitchers from the batters and see if this changes any metrics (since they usually bat poorly)
+```{r}
+batting_no_pitchers <- anti_join(batting, pitchers, by = "playerID")
+```
+
+
+EDA on batting statistics 
+```{r}
+boxplot(batting_no_pitchers$BA, ylab = "Batting Average", main = "Batting Average since 1985")
+boxplot(batting_no_pitchers$OBP, ylab = "On Base Percentage",main = "OBP since 1985")
+boxplot(batting_no_pitchers$SLG, ylab = "Slugging Percentage", main = "SLG since 1985")
+boxplot(batting_no_pitchers$OPS, ylab = "OPS", main = "OPS since 1985")
+
+
+summary(batting_no_pitchers$BA)
+summary(batting_no_pitchers$OBP)
+summary(batting_no_pitchers$SLG)
+summary(batting_no_pitchers$OPS)
+
+
+```
+
+
+
+It seems that the average values for most batting metrics went up slightly when pitchers were removed.
+Now let's examine the relationship between salary and these performance metrics
+
+
+Batting Average vs Salary
+```{r}
+batting_no_pitchers %>% ggplot(aes(x = BA, y = zSalary, color = year)) + geom_point()
+cor(batting_no_pitchers$zSalary, batting_no_pitchers$BA, use = "pairwise.complete")
+
+```
+OBP vs Salary 
+```{r}
+batting_no_pitchers %>% ggplot(aes(x = OBP, y = zSalary, color = year)) + geom_point()
+cor(batting_no_pitchers$zSalary, batting_no_pitchers$OBP, use = "pairwise.complete")
+```
+SLG vs Salary
+```{r}
+batting_no_pitchers %>% ggplot(aes(x = SLG, y = zSalary, color = year)) + geom_point()
+cor(batting_no_pitchers$zSalary, batting_no_pitchers$SLG, use = "pairwise.complete")
+```
+
+
+
+OPS vs salary
+```{r}
+batting_no_pitchers %>% ggplot(aes(x = OPS, y = zSalary, color = year)) + geom_point()
+cor(batting_no_pitchers$zSalary, batting_no_pitchers$OPS, use = "pairwise.complete")
+```
+
+
+YearsPlaying vs Salary
+```{r}
+batting_no_pitchers %>% ggplot(aes(x = yearsPlaying, y = zSalary, color = year)) + geom_point()
+cor(batting_no_pitchers$zSalary, batting_no_pitchers$yearsPlaying, use = "pairwise.complete")
+```
+
+Home runs vs Salary 
+```{r}
+batting_no_pitchers %>% ggplot(aes(x = HR, y = zSalary, color = year)) + geom_point()
+cor(batting_no_pitchers$zSalary, batting_no_pitchers$HR, use = "pairwise.complete")
+```
+
+RBIs vs Salary
+```{r}
+batting_no_pitchers %>% ggplot(aes(x = RBI, y = zSalary, color = year)) + geom_point()
+cor(batting_no_pitchers$zSalary, batting_no_pitchers$RBI, use = "pairwise.complete")
+```
+
+TA vs Salary
+```{r}
+batting_no_pitchers %>% ggplot(aes(x = TA, y = zSalary, color = year)) + geom_point()
+cor(batting_no_pitchers$zSalary, batting_no_pitchers$TA, use = "pairwise.complete")
+```
+
+GPA vs Salary
+```{r}
+batting_no_pitchers %>% ggplot(aes(x = GPA, y = zSalary, color = year)) + geom_point()
+cor(batting_no_pitchers$zSalary, batting_no_pitchers$GPA, use = "pairwise.complete")
+```
+
+
+It seems there are some (loose) correlations between key batting attributes and salaries.  Let's filter the data to recent years and see if the salary has more correlation today with these features than it did with the same features in the past 
+
+
+```{r}
+recent_batting <- batting_no_pitchers %>% filter(year > 2010)
+```
+
+Recent batting BA
+```{r}
+recent_batting %>% ggplot(aes(x = BA, y = zSalary, color = year)) + geom_point()
+cor(recent_batting$zSalary, recent_batting$BA, use = "pairwise.complete")
+```
+Recent Batting OBP
+```{r}
+recent_batting %>% ggplot(aes(x = OBP, y = zSalary, color = year)) + geom_point()
+cor(recent_batting$zSalary, recent_batting$OBP, use = "pairwise.complete")
+```
+
+Recent Batting SLG
+```{r}
+recent_batting %>% ggplot(aes(x = SLG, y = zSalary, color = year)) + geom_point()
+cor(recent_batting$zSalary, recent_batting$SLG, use = "pairwise.complete")
+```
+
+
+
+
+Recent Batting OPS
+```{r}
+recent_batting %>% ggplot(aes(x = OPS, y = zSalary, color = year)) + geom_point()
+cor(recent_batting$zSalary, recent_batting$OPS, use = "pairwise.complete")
+```
+
+
+Recent Batting TA
+```{r}
+recent_batting %>% ggplot(aes(x = TA, y = zSalary, color = year)) + geom_point()
+cor(recent_batting$zSalary, recent_batting$TA, use = "pairwise.complete")
+```
+
+Recent Batting GPA
+```{r}
+recent_batting %>% ggplot(aes(x = GPA, y = zSalary, color = year)) + geom_point()
+cor(recent_batting$zSalary, recent_batting$GPA, use = "pairwise.complete")
+```
+
+
+
+Recent Batting Years Playing
+```{r}
+recent_batting %>% ggplot(aes(x = yearsPlaying, y = zSalary, color = year)) + geom_point()
+cor(recent_batting$zSalary, recent_batting$yearsPlaying, use = "pairwise.complete")
+```
+
+
+Let's examine free agency salaries and see if their side by side boxplots look any different.
+
+```{r}
+fa_recent_batting <- recent_batting %>% filter(yearsPlaying >= 6)
+non_fa_recent_batting <- recent_batting %>% filter(yearsPlaying < 6)
+```
+
+Side by side boxplot
+```{r}
+boxplot(fa_recent_batting$zSalary, non_fa_recent_batting$zSalary, names = c("Free agents", "Non Free Agents"), ylab = "Normalized Salary for the respective year", main = "Free agent vs Non Free Agent Salary Comparison")
+
+summary(fa_recent_batting$zSalary)
+summary(non_fa_recent_batting$zSalary)
+
+
+```
+There is a huge difference, but there seem to be a lot of outliers in the non free agents. Let's examine them more closely 
+
+```{r}
+#calculate upper bound for outliers
+non_fa_salary_UB = quantile(non_fa_recent_batting$zSalary, .75) + 1.5* IQR(non_fa_recent_batting$zSalary) 
+fa_salary_UB = quantile(fa_recent_batting$zSalary, .75) + 1.5* IQR(fa_recent_batting$zSalary) 
+
+#Get the outliers and normal
+
+non_fa_salary_outliers <- non_fa_recent_batting %>% filter(zSalary >= non_fa_salary_UB)
+non_fa_salary_normal <- non_fa_recent_batting %>% filter(zSalary < non_fa_salary_UB)
+
+fa_salary_outliers <- fa_recent_batting %>% filter(zSalary >= fa_salary_UB)
+fa_salary_normal <- fa_recent_batting %>% filter(zSalary < fa_salary_UB)
+
+```
+
+It is interesting to compare key performance metric data between outliers and non-outliers for non-FAs
+```{r}
+head(batting)
+
+boxplot(non_fa_salary_outliers$HR, non_fa_salary_normal$HR, names = c("Outliers", "Non Outliers"), ylab = "Home Runs", main = "Home runs for the outliers and non outliers in the non-free agent group")
+
+boxplot(non_fa_salary_outliers$BA, non_fa_salary_normal$BA, names = c("Outliers", "Non Outliers"), ylab = "Batting Average", main = "Batting Average for the outliers and non outliers in the non-free agent group")
+
+boxplot(non_fa_salary_outliers$G, non_fa_salary_normal$G, names = c("Outliers", "Non Outliers"), ylab = "Games", main = "Games for the outliers and non outliers in the non-free agent group")
+
+boxplot(non_fa_salary_outliers$RBI, non_fa_salary_normal$RBI, names = c("Outliers", "Non Outliers"), ylab = "RBIs", main = "RBIs for the outliers and non outliers in the non-free agent group")
+
+boxplot(non_fa_salary_outliers$OBP, non_fa_salary_normal$OBP, names = c("Outliers", "Non Outliers"), ylab = "OBP", main = "OBP for the outliers and non outliers in the non-free agent group")
+
+boxplot(non_fa_salary_outliers$SLG, non_fa_salary_normal$SLG, names = c("Outliers", "Non Outliers"), ylab = "SLG", main = "SLG for the outliers and non outliers in the non-free agent group")
+
+boxplot(non_fa_salary_outliers$OPS, non_fa_salary_normal$OPS, names = c("Outliers", "Non Outliers"), ylab = "OPS", main = "OPS for the outliers and non outliers in the non-free agent group")
+
+boxplot(non_fa_salary_outliers$GPA, non_fa_salary_normal$GPA, names = c("Outliers", "Non Outliers"), ylab = "GPA", main = "GPA for the outliers and non outliers in the non-free agent group")
+```
+We can see that most people in the non-free agent group have worse key batting metrics overall.  Let's look at the free agent (FA) group
+
+```{r}
+boxplot(fa_salary_outliers$HR, fa_salary_normal$HR, names = c("Outliers", "Non Outliers"), ylab = "Home Runs", main = "Home runs for the outliers and non outliers in the free agent group")
+
+boxplot(fa_salary_outliers$BA, fa_salary_normal$BA, names = c("Outliers", "Non Outliers"), ylab = "Batting Average", main = "Batting Average for the outliers and non outliers in the free agent group")
+
+boxplot(fa_salary_outliers$G, fa_salary_normal$G, names = c("Outliers", "Non Outliers"), ylab = "Games", main = "Games for the outliers and non outliers in the free agent group")
+
+boxplot(fa_salary_outliers$RBI, fa_salary_normal$RBI, names = c("Outliers", "Non Outliers"), ylab = "RBIs", main = "RBIs for the outliers and non outliers in the free agent group")
+
+boxplot(fa_salary_outliers$OBP, fa_salary_normal$OBP, names = c("Outliers", "Non Outliers"), ylab = "OBP", main = "OBP for the outliers and non outliers in the free agent group")
+
+boxplot(fa_salary_outliers$SLG, fa_salary_normal$SLG, names = c("Outliers", "Non Outliers"), ylab = "SLG", main = "SLG for the outliers and non outliers in the free agent group")
+
+boxplot(fa_salary_outliers$OPS, fa_salary_normal$OPS, names = c("Outliers", "Non Outliers"), ylab = "OPS", main = "OPS for the outliers and non outliers in the free agent group")
+
+boxplot(fa_salary_outliers$GPA, fa_salary_normal$GPA, names = c("Outliers", "Non Outliers"), ylab = "GPA", main = "GPA for the outliers and non outliers in the free agent group")
+
+```
+On these performance metrics, the outliers have a higher median metric but the non-outliers have a higher range, which means that these people with better performance stats are likely being underpaid for their work
+
+Let's now see if key baseball stats are correlated differently with salary for those in the non-free agent group than with those in the free agent group.  We will first
+do a group comparison and then examine the outliers within the groups as well.
+```{r}
+
+#FREE AGENTS
+
+head(fa_recent_batting)
+cor(fa_recent_batting$zSalary, fa_recent_batting$HR)
+cor(fa_recent_batting$zSalary, fa_recent_batting$RBI)
+cor(fa_recent_batting$zSalary, fa_recent_batting$OBP)
+cor(fa_recent_batting$zSalary, fa_recent_batting$H)
+cor(fa_recent_batting$zSalary, fa_recent_batting$SLG)
+cor(fa_recent_batting$zSalary, fa_recent_batting$OPS)
+cor(fa_recent_batting$zSalary, fa_recent_batting$TA)
+cor(fa_recent_batting$zSalary, fa_recent_batting$GPA)
+
+
+
+
+
+
+
+#NON FREE AGENTS
+cor(non_fa_recent_batting$zSalary, non_fa_recent_batting$HR)
+cor(non_fa_recent_batting$zSalary, non_fa_recent_batting$RBI)
+cor(non_fa_recent_batting$zSalary, non_fa_recent_batting$OBP)
+cor(non_fa_recent_batting$zSalary, non_fa_recent_batting$H)
+cor(non_fa_recent_batting$zSalary, non_fa_recent_batting$SLG)
+cor(non_fa_recent_batting$zSalary, non_fa_recent_batting$OPS)
+cor(non_fa_recent_batting$zSalary, non_fa_recent_batting$TA)
+cor(non_fa_recent_batting$zSalary, non_fa_recent_batting$GPA)
+
+non_fa_recent_batting %>%ggplot(aes(x = RBI, y = zSalary, color = yearsPlaying)) + geom_point()
+
+nonRookies <- non_fa_recent_batting %>% filter(yearsPlaying > 2)
+
+nonRookies %>%ggplot(aes(x = RBI, y = zSalary, color = yearsPlaying)) + geom_point()
+cor(nonRookies$zSalary, nonRookies$HR)
+
+
+
+
+```
+
+This is very interesting. It seems that among free agents, key batting statistics are around 10% more correlated with salary than for non- free agents. What is influential in salary for non-free agents?
+
+Let's examine the salary by 
+
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
